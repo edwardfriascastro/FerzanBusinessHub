@@ -271,3 +271,10 @@ def eliminar_empleado(empleado_id: int):
         "mensaje": "Empleado eliminado correctamente",
         "empleado_id": empleado_eliminado[0]
     }
+    
+@app.get("/health")
+def health_check():
+        return {
+        "status": "ok",
+        "service": "Ferzan Business Hub API"
+    }
