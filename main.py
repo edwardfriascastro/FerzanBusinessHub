@@ -91,16 +91,28 @@ def inicio():
 
 
 @app.get("/empleados", response_model=list[EmpleadoRespuesta])
-def obtener_empleados():
-
+def obtener_empleados(departamento: str | None = None):
     conexion = obtener_conexion()
-
     cursor = conexion.cursor()
-
-    cursor.execute("""
-        SELECT empleado_id, nombre, departamento, salario
-        FROM empleados
-    """)
+    
+    if departamento is not None:
+    # Buscar por departamento
+        cursor.execute(
+            """
+            SELECT empleado_id, nombre, departamento, salario
+            FROM empleados
+            WHERE departamento = %s
+            """,
+            (departamento,)
+        )
+    else:
+        #Traer todos los empleados
+        cursor.execute(
+            """
+            SELECT empleado_id, nombre, departamento, salario
+            FROM empleados
+            """
+        )
 
     empleados = cursor.fetchall()
 
