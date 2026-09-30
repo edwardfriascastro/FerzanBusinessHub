@@ -53,6 +53,10 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import psycopg
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 
 app = FastAPI()
@@ -75,13 +79,12 @@ class EmpleadoCrear(BaseModel):
 
 def obtener_conexion():
     return psycopg.connect(
-        host="localhost",
-        port=5432,
-        dbname="ferzan_db",
-        user="ferzan_user",
-        password="ferzan_password"
+        host=os.getenv("DB_HOST"),
+        port=os.getenv("DB_PORT"),
+        dbname=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD")
     )
-
 
 @app.get("/")
 def inicio():
