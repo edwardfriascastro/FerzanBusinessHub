@@ -50,17 +50,100 @@
 #         "empleado": empleado
 #     }
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException,Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 import psycopg
 from dotenv import load_dotenv
 import os
 
+from app.schema import UsuarioCrear, UsuarioLogin
+from app.security import crear_hash, verificar_password, crear_token_acceso,verificar_token
+
 load_dotenv()
 
+security = HTTPBearer()
 
 app = FastAPI()
 
+
+def obtener_usuario_actual(
+    credenciales: HTTPAuthorizationCredentials = Depends(security)
+):
+    token = credenciales.credentials
+
+    payload = verificar_token(token)
+
+    if payload is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Token inválido o expirado"
+        )
+
+    try:
+        usuario_id = int(payload.get("sub", ""))
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=401,
+            detail="Token inválido"
+        )
+
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+
+    try:
+        cursor.execute(
+            """
+            SELECT usuario_id, nombre, email, activo, rol
+            FROM usuarios
+            WHERE usuario_id = %s
+            """,
+            (usuario_id,)
+        )
+
+        usuario_db = cursor.fetchone()
+
+    finally:
+        cursor.close()
+        conexion.close()
+
+    if usuario_db is None or not usuario_db[3]:
+        raise HTTPException(
+            status_code=401,
+            detail="Usuario inexistente o cuenta inactiva"
+        )
+
+    return {
+        "usuario_id": usuario_db[0],
+        "nombre": usuario_db[1],
+        "email": usuario_db[2],
+        "activo": usuario_db[3],
+        "rol": usuario_db[4]
+    }
+    
+
+def exigir_rol(*roles_permitidos: str):
+    def verificar_rol(
+        usuario_actual=Depends(obtener_usuario_actual)
+    ):
+        if usuario_actual["rol"] not in roles_permitidos:
+            raise HTTPException(
+                status_code=403,
+                detail="No tienes permisos para realizar esta operación"
+            )
+
+        return usuario_actual
+
+    return verificar_rol
+    
+@app.get("/me")
+def obtener_mi_usuario(
+    usuario_actual=Depends(obtener_usuario_actual)
+):
+    return {
+        "mensaje": "Autenticación correcta",
+        "usuario": usuario_actual
+    }
 class Empleado(BaseModel):
     nombre: str
     departamento: str
@@ -94,12 +177,15 @@ def inicio():
 
 
 @app.get("/empleados", response_model=list[EmpleadoRespuesta])
-def obtener_empleados(departamento: str | None = None):
+def obtener_empleados(
+    departamento: str | None = None,
+    usuario_actual=Depends(obtener_usuario_actual),
+):
     conexion = obtener_conexion()
     cursor = conexion.cursor()
-    
+
     if departamento is not None:
-    # Buscar por departamento
+        # Buscar por departamento
         cursor.execute(
             """
             SELECT empleado_id, nombre, departamento, salario
@@ -109,7 +195,7 @@ def obtener_empleados(departamento: str | None = None):
             (departamento,)
         )
     else:
-        #Traer todos los empleados
+        # Traer todos los empleados
         cursor.execute(
             """
             SELECT empleado_id, nombre, departamento, salario
@@ -135,8 +221,10 @@ def obtener_empleados(departamento: str | None = None):
     return resultado
 
 @app.get("/empleados/{empleado_id}", response_model=EmpleadoRespuesta)
-def obtener_empleado(empleado_id: int):
-
+def obtener_empleado(
+    empleado_id: int,
+    usuario_actual=Depends(obtener_usuario_actual)
+):
     conexion = obtener_conexion()
 
     cursor = conexion.cursor()
@@ -169,8 +257,10 @@ def obtener_empleado(empleado_id: int):
     }
 
 @app.post("/empleados")
-def crear_empleado(empleado: EmpleadoCrear):
-
+def crear_empleado(
+    empleado: EmpleadoCrear,
+    usuario_actual=Depends(exigir_rol("admin"))
+):
     conexion = obtener_conexion()
 
     cursor = conexion.cursor()
@@ -203,7 +293,10 @@ def crear_empleado(empleado: EmpleadoCrear):
     }
     
 @app.put("/empleados/{empleado_id}", response_model=EmpleadoRespuesta)
-def actualizar_empleado(empleado_id: int, empleado: EmpleadoCrear):
+def actualizar_empleado(empleado_id: int, empleado: EmpleadoCrear,
+    usuario_actual=Depends(exigir_rol("admin"))
+):
+
 
     conexion = obtener_conexion()
 
@@ -251,7 +344,7 @@ def actualizar_empleado(empleado_id: int, empleado: EmpleadoCrear):
     
 
 @app.delete("/empleados/{empleado_id}")
-def eliminar_empleado(empleado_id: int):
+def eliminar_empleado(empleado_id: int, usuario_actual=Depends(exigir_rol("admin"))):
 
     conexion = obtener_conexion()
 
@@ -292,4 +385,82 @@ def health_check():
         return {
         "status": "ok",
         "service": "Ferzan Business Hub API"
+    }
+        
+@app.post("/register")
+def registrar_usuario(usuario: UsuarioCrear):
+
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+
+    password_hash = crear_hash(usuario.password)
+
+    cursor.execute(
+        """
+        INSERT INTO usuarios (nombre, email, password_hash)
+        VALUES (%s, %s, %s)
+        RETURNING usuario_id, nombre, email
+        """,
+        (
+            usuario.nombre,
+            usuario.email,
+            password_hash
+        )
+    )
+
+    nuevo_usuario = cursor.fetchone()
+
+    conexion.commit()
+
+    cursor.close()
+    conexion.close()
+
+    return {
+        "usuario_id": nuevo_usuario[0],
+        "nombre": nuevo_usuario[1],
+        "email": nuevo_usuario[2]
+    }
+    
+@app.post("/login")
+def iniciar_sesion(usuario: UsuarioLogin):
+
+    conexion = obtener_conexion()
+    cursor = conexion.cursor()
+
+    cursor.execute(
+        """
+        SELECT usuario_id, nombre, email, password_hash
+        FROM usuarios
+        WHERE email = %s
+        """,
+        (usuario.email,)
+    )
+
+    usuario_db = cursor.fetchone()
+
+    cursor.close()
+    conexion.close()
+
+    if usuario_db is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Credenciales incorrectas"
+        )
+
+    password_correcta = verificar_password(
+        usuario.password,
+        usuario_db[3]
+    )
+
+    if not password_correcta:
+        raise HTTPException(
+            status_code=401,
+            detail="Credenciales incorrectas"
+        )
+
+    token = crear_token_acceso(usuario_db[0])
+
+    return {
+        "access_token": token,
+        "token_type": "bearer"
     }
