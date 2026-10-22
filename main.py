@@ -59,12 +59,20 @@ import os
 
 from app.schema import UsuarioCrear, UsuarioLogin
 from app.security import crear_hash, verificar_password, crear_token_acceso,verificar_token
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
 security = HTTPBearer()
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def obtener_usuario_actual(
@@ -122,20 +130,31 @@ def obtener_usuario_actual(
     }
     
 
+
+def verificar_rol_permitido(
+    usuario_actual: dict,
+    roles_permitidos: tuple[str, ...],
+) -> dict:
+    if usuario_actual["rol"] not in roles_permitidos:
+        raise HTTPException(
+            status_code=403,
+            detail="No tienes permisos para realizar esta operación",
+        )
+
+    return usuario_actual
+
+
 def exigir_rol(*roles_permitidos: str):
     def verificar_rol(
-        usuario_actual=Depends(obtener_usuario_actual)
+        usuario_actual=Depends(obtener_usuario_actual),
     ):
-        if usuario_actual["rol"] not in roles_permitidos:
-            raise HTTPException(
-                status_code=403,
-                detail="No tienes permisos para realizar esta operación"
-            )
-
-        return usuario_actual
+        return verificar_rol_permitido(
+            usuario_actual,
+            roles_permitidos,
+        )
 
     return verificar_rol
-    
+
 @app.get("/me")
 def obtener_mi_usuario(
     usuario_actual=Depends(obtener_usuario_actual)
